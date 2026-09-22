@@ -1,0 +1,28 @@
+# Zephyr / west build output
+build/
+
+# Zephyr generated files
+.zephyr/
+zephyr/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# Logs
+*.log
