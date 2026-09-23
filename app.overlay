@@ -11,3 +11,27 @@
         reg = <0x38>;
     };
 };
+
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        /*
+         * ZBOSS NVRAM:
+         * 0x8000 = 32 KB
+         * 2 logical pages -> 16 KB each
+         * 16 KB is a multiple of the nRF52840 4 KB flash page.
+         */
+        zboss_nvram: partition@ec000 {
+            label = "zboss_nvram";
+            reg = <0x000ec000 0x00008000>;
+        };
+
+        zboss_product_config: partition@f4000 {
+            label = "zboss_product_config";
+            reg = <0x000f4000 0x00001000>;
+        };
+    };
+};
