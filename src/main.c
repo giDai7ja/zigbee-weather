@@ -32,7 +32,7 @@ LOG_MODULE_REGISTER(weather, LOG_LEVEL_INF);
 #define BMP280_NODE DT_NODELABEL(bmp280)
 #define ADC_NODE DT_NODELABEL(adc)
 
-#define AHT20_ADDR 0x38
+#define AHT20_ADDR DT_REG_ADDR(DT_NODELABEL(aht20))
 #define AHT20_CMD_TRIGGER 0xAC
 
 #define ADC_RESOLUTION 14
@@ -459,11 +459,11 @@ static int read_bmp280(const struct device *bmp280)
 		return ret;
 	}
 
-	int64_t pressure_pa =
-		(int64_t)pressure_value.val1 +
-		pressure_value.val2 / 1000000;
+	int32_t pressure_x10 =
+        pressure_value.val1 * 10 +
+        pressure_value.val2 / 100000;
 
-	pressure = (zb_int16_t)(pressure_pa / 100);
+    pressure = (zb_int16_t)pressure_x10;
 
 	return 0;
 }
