@@ -3,6 +3,7 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/adc.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/dt-bindings/adc/nrf-saadc.h>
 #include <zephyr/logging/log.h>
 
@@ -36,6 +37,14 @@ LOG_MODULE_REGISTER(weather, LOG_LEVEL_INF);
 #define AHT20_CMD_TRIGGER 0xAC
 
 #define ADC_RESOLUTION 14
+
+/* Button for factory reset */
+#define BUTTON_NODE DT_ALIAS(sw0)
+static const struct gpio_dt_spec button_gpio = 
+    GPIO_DT_SPEC_GET_OR(BUTTON_NODE, gpios, {0});
+
+#define BUTTON_PRESS_TIME_MS 3000
+#define BUTTON_CHECK_INTERVAL_MS 50
 
 /* --------------------------------------------------------------------------
  * Zigbee
@@ -427,24 +436,12 @@ static int read_aht20(const struct device *i2c)
 
 static int read_bmp280(const struct device *bmp280)
 {
-	struct sensor_value temperature_value;
 	struct sensor_value pressure_value;
 
 	int ret = sensor_sample_fetch(bmp280);
 
 	if (ret) {
 		LOG_ERR("BMP280 sample fetch failed: %d", ret);
-		return ret;
-	}
-
-	ret = sensor_channel_get(
-		bmp280,
-		SENSOR_CHAN_AMBIENT_TEMP,
-		&temperature_value
-	);
-
-	if (ret) {
-		LOG_ERR("BMP280 temperature read failed: %d", ret);
 		return ret;
 	}
 
@@ -474,34 +471,17 @@ static int read_bmp280(const struct device *bmp280)
 
 static int read_vdd(const struct device *adc, int32_t *vdd_mv)
 {
-	struct adc_channel_cfg channel_cfg = {
-		.gain = ADC_GAIN_1_6,
-		.reference = ADC_REF_INTERNAL,
-		.acquisition_time = ADC_ACQ_TIME_DEFAULT,
-		.channel_id = 0,
-		.input_positive = NRF_SAADC_VDD,
-	};
-
-	int ret = adc_channel_setup(
-		adc,
-		&channel_cfg
-	);
-
-	if (ret) {
-		LOG_ERR("ADC channel setup failed: %d", ret);
-		return ret;
-	}
 
 	int16_t sample = 0;
 
 	struct adc_sequence sequence = {
-		.channels = BIT(channel_cfg.channel_id),
+		.channels = BIT(0),
 		.buffer = &sample,
 		.buffer_size = sizeof(sample),
 		.resolution = ADC_RESOLUTION,
 	};
 
-	ret = adc_read(
+	int ret = adc_read(
 		adc,
 		&sequence
 	);
@@ -680,6 +660,50 @@ static void configure_reporting(void)
 }
 
 /* --------------------------------------------------------------------------
+ * Button handler
+ * -------------------------------------------------------------------------- */
+
+static void button_handler(struct k_work *work)
+{
+	static uint32_t press_start_time = 0;
+	static bool button_pressed = false;
+	
+	if (gpio_pin_get_dt(&button_gpio)) {
+		if (!button_pressed) {
+			button_pressed = true;
+			press_start_time = k_uptime_get_32();
+			LOG_INF("Button pressed");
+		} else {
+			uint32_t press_duration = 
+				k_uptime_get_32() - press_start_time;
+			
+			if (press_duration >= BUTTON_PRESS_TIME_MS) {
+				LOG_INF("Long press detected - factory reset");
+				button_pressed = false;
+				
+				zb_bdb_reset_via_local_action(0);
+			}
+		}
+	} else {
+		if (button_pressed) {
+			uint32_t press_duration = 
+				k_uptime_get_32() - press_start_time;
+			LOG_INF("Button released after %d ms", press_duration);
+			button_pressed = false;
+		}
+	}
+}
+
+K_WORK_DEFINE(button_work, button_handler);
+
+static void button_timer_handler(struct k_timer *timer)
+{
+	k_work_submit(&button_work);
+}
+
+K_TIMER_DEFINE(button_timer, button_timer_handler, NULL);
+
+/* --------------------------------------------------------------------------
  * Zigbee signal handler
  * -------------------------------------------------------------------------- */
 
@@ -773,6 +797,34 @@ int main(void)
 		return 0;
 	}
 
+		/* Initialize button on pin 0.24 */
+	if (button_gpio.port) {
+		if (!device_is_ready(button_gpio.port)) {
+			LOG_ERR("Button GPIO not ready");
+			return 0;
+		}
+		
+		gpio_pin_configure_dt(&button_gpio, GPIO_INPUT);
+		k_timer_start(&button_timer, K_MSEC(BUTTON_CHECK_INTERVAL_MS), 
+		              K_MSEC(BUTTON_CHECK_INTERVAL_MS));
+		LOG_INF("Button initialized on pin 0.24");
+	}
+
+	/* Setup ADC channel once */
+	struct adc_channel_cfg channel_cfg = {
+		.gain = ADC_GAIN_1_6,
+		.reference = ADC_REF_INTERNAL,
+		.acquisition_time = ADC_ACQ_TIME_DEFAULT,
+		.channel_id = 0,
+		.input_positive = NRF_SAADC_VDD,
+	};
+
+	int ret = adc_channel_setup(adc, &channel_cfg);
+	if (ret) {
+		LOG_ERR("ADC channel setup failed: %d", ret);
+		return 0;
+	}
+
 	LOG_INF("Zigbee weather sensor started");
 
 	LOG_INF(
@@ -840,6 +892,52 @@ int main(void)
 				vdd_mv / 1000,
 				vdd_mv % 1000,
 				battery_percentage_remaining / 2
+			);
+
+			/* Mark attributes for reporting */
+			ZB_ZCL_SET_ATTRIBUTE(
+				WEATHER_ENDPOINT,
+				ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
+				ZB_ZCL_CLUSTER_SERVER_ROLE,
+				ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
+				(zb_uint8_t *)&temperature,
+				ZB_FALSE
+			);
+
+			ZB_ZCL_SET_ATTRIBUTE(
+				WEATHER_ENDPOINT,
+				ZB_ZCL_CLUSTER_ID_PRESSURE_MEASUREMENT,
+				ZB_ZCL_CLUSTER_SERVER_ROLE,
+				ZB_ZCL_ATTR_PRESSURE_MEASUREMENT_VALUE_ID,
+				(zb_uint8_t *)&pressure,
+				ZB_FALSE
+			);
+
+			ZB_ZCL_SET_ATTRIBUTE(
+				WEATHER_ENDPOINT,
+				ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
+				ZB_ZCL_CLUSTER_SERVER_ROLE,
+				ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
+				(zb_uint8_t *)&humidity,
+				ZB_FALSE
+			);
+
+			ZB_ZCL_SET_ATTRIBUTE(
+				WEATHER_ENDPOINT,
+				ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
+				ZB_ZCL_CLUSTER_SERVER_ROLE,
+				ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_ID,
+				(zb_uint8_t *)&battery_voltage,
+				ZB_FALSE
+			);
+
+			ZB_ZCL_SET_ATTRIBUTE(
+				WEATHER_ENDPOINT,
+				ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
+				ZB_ZCL_CLUSTER_SERVER_ROLE,
+				ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
+				(zb_uint8_t *)&battery_percentage_remaining,
+				ZB_FALSE
 			);
 
 		} else {
