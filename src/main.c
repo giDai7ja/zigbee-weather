@@ -133,14 +133,33 @@ static zb_uint8_t battery_percentage_threshold3 = 0;
 static zb_uint32_t battery_alarm_state = 0;
 
 /* --------------------------------------------------------------------------
+ * Basic Cluster Strings (для корректного определения в z2m)
+ * -------------------------------------------------------------------------- */
+static zb_uint8_t manufacturer_name[] = { 7, 'C', 't', 'h', 'u', 'l', 'h', 'u' };
+static zb_uint8_t model_identifier[] = { 13, 'W', 'e', 'a', 't', 'h', 'e', 'r', 'S', 'e', 'n', 's', 'o', 'r' };
+static zb_uint8_t date_code[] = { 8, '2', '0', '2', '6', '0', '9', '2', '5' };
+static zb_uint8_t sw_build_id[] = { 5, '1', '.', '0', '.', '0' };
+static zb_uint8_t location[] = { 2, 'R', 'U' };
+
+/* --------------------------------------------------------------------------
  * ZCL attribute lists
  * -------------------------------------------------------------------------- */
 
-ZB_ZCL_DECLARE_BASIC_ATTRIB_LIST(
+ZB_ZCL_DECLARE_BASIC_ATTRIB_LIST_EXT(
 	basic_attr_list,
-	ZB_ZCL_BASIC_ZCL_VERSION_DEFAULT_VALUE,
-	ZB_ZCL_BASIC_POWER_SOURCE_DC_SOURCE
+	3,                                  // 1. ZCL version
+	0,                                  // 2. App device version
+	ZB_ZCL_BASIC_POWER_SOURCE_BATTERY,  // 3. Power source (0x03 = Battery)
+	1,                                  // 4. HW version
+	manufacturer_name,                  // 5. Manufacturer name
+	model_identifier,                   // 6. Model identifier
+	date_code,                          // 7. Date code
+	sw_build_id,                        // 8. SW build ID
+	0,                                  // 9. Image type
+	2,                                  // 10. Stack version
+	location                            // 11. Location (всего 12 аргументов с basic_attr_list)
 );
+
 
 ZB_ZCL_DECLARE_TEMP_MEASUREMENT_ATTRIB_LIST(
 	temperature_attr_list,
@@ -416,12 +435,12 @@ static int read_aht20(const struct device *i2c)
 		raw[5];
 
 	uint32_t humidity_x100 =
-		((uint64_t)raw_humidity * 10000ULL) /
+		((uint64_t)raw_humidity * 10000ULL + 524288ULL) /
 		1048576ULL;
 
 	int32_t temperature_x100 =
-		((int64_t)raw_temperature * 20000LL) /
-		1048576LL -
+		(((int64_t)raw_temperature * 20000LL + 524288LL) /
+		1048576LL) -
 		5000LL;
 
 	temperature = (zb_int16_t)temperature_x100;
@@ -458,7 +477,7 @@ static int read_bmp280(const struct device *bmp280)
 
 	int32_t pressure_x10 =
         pressure_value.val1 * 10 +
-        pressure_value.val2 / 100000;
+        (pressure_value.val2 + 50000) / 100000;
 
     pressure = (zb_int16_t)pressure_x10;
 
@@ -492,10 +511,10 @@ static int read_vdd(const struct device *adc, int32_t *vdd_mv)
 	}
 
 	*vdd_mv =
-		((int32_t)sample * 3600) /
+		((int32_t)sample * 3600 + (1 << (ADC_RESOLUTION - 1))) /
 		(1 << ADC_RESOLUTION);
 
-	battery_voltage =
+		battery_voltage =
 		(zb_uint8_t)(*vdd_mv / 100);
 
 	uint8_t percentage =
