@@ -17,6 +17,7 @@
 #include <zcl/zb_zcl_pressure_measurement.h>
 #include <zcl/zb_zcl_rel_humidity_measurement.h>
 #include <zcl/zb_zcl_power_config.h>
+#include <zcl/zb_zcl_poll_control.h>
 #include <zcl/zb_zcl_reporting.h>
 
 #include <zigbee/zigbee_app_utils.h>
@@ -136,8 +137,8 @@ static zb_uint32_t battery_alarm_state = 0;
  * Basic Cluster Strings (для корректного определения в z2m)
  * -------------------------------------------------------------------------- */
 static zb_uint8_t manufacturer_name[] = { 7, 'C', 't', 'h', 'u', 'l', 'h', 'u' };
-static zb_uint8_t model_identifier[] = { 13, 'W', 'e', 'a', 't', 'h', 'e', 'r', 'S', 'e', 'n', 's', 'o', 'r' };
-static zb_uint8_t date_code[] = { 8, '2', '0', '2', '6', '0', '9', '2', '5' };
+static zb_uint8_t model_identifier[] = { 12, 'R', 'l', 'y', 'e', 'h', 'S', 't', 'a', 't', 'i', 'o', 'n' };
+static zb_uint8_t date_code[] = { 8, '2', '0', '2', '6', '0', '9', '2', '8' };
 static zb_uint8_t sw_build_id[] = { 5, '1', '.', '0', '.', '0' };
 static zb_uint8_t location[] = { 2, 'R', 'U' };
 
@@ -851,9 +852,7 @@ int main(void)
 		MEASUREMENT_INTERVAL_SECONDS
 	);
 
-	LOG_INF(
-		"Sensors: AHT20@0x38 BMP280@0x77"
-	);
+	LOG_INF("R'lyeh Station sensors 🐙 : AHT20@0x38 BMP280@0x77");
 
 	LOG_INF(
 		"Battery warning threshold: %d.%03d V",
