@@ -66,39 +66,6 @@ static const struct gpio_dt_spec button_gpio =
  * -------------------------------------------------------------------------- */
 
 #define BATTERY_LOW_WARNING_MV 2700
-#define BATTERY_LOW_WARNING_ZCL 27
-
-struct battery_level_point {
-	int32_t voltage_mv;
-	uint8_t percentage;
-};
-
-static const struct battery_level_point battery_table[] = {
-	{ 3400, 100 },
-	{ 3350,  95 },
-	{ 3330,  90 },
-	{ 3310,  85 },
-	{ 3290,  80 },
-	{ 3270,  75 },
-	{ 3250,  70 },
-	{ 3230,  65 },
-	{ 3210,  60 },
-	{ 3190,  55 },
-	{ 3170,  50 },
-	{ 3150,  45 },
-	{ 3130,  40 },
-	{ 3110,  35 },
-	{ 3090,  30 },
-	{ 3070,  25 },
-	{ 3050,  20 },
-	{ 3000,  15 },
-	{ 2900,  10 },
-	{ 2800,   5 },
-	{ 2700,   0 },
-};
-
-#define BATTERY_TABLE_SIZE \
-	(sizeof(battery_table) / sizeof(battery_table[0]))
 
 /* --------------------------------------------------------------------------
  * Persistent Zigbee configuration
@@ -114,16 +81,14 @@ static zb_int16_t temperature;
 static zb_int16_t pressure;
 static zb_uint16_t humidity;
 
-static zb_uint8_t battery_voltage;
-static zb_uint8_t battery_percentage_remaining;
-
+static zb_uint16_t battery_voltage;
+static zb_uint8_t battery_percentage_remaining = 0xFF;
 static zb_uint8_t battery_size = 0xFF;
 static zb_uint8_t battery_quantity = 1;
-static zb_uint8_t battery_rated_voltage = 33;
+static zb_uint16_t battery_rated_voltage = 3300;
 static zb_uint8_t battery_alarm_mask = 0;
-static zb_uint8_t battery_voltage_min_threshold =
-	BATTERY_LOW_WARNING_ZCL;
-
+static zb_uint16_t battery_voltage_min_threshold =
+	BATTERY_LOW_WARNING_MV;
 static zb_uint8_t battery_voltage_threshold1 = 0;
 static zb_uint8_t battery_voltage_threshold2 = 0;
 static zb_uint8_t battery_voltage_threshold3 = 0;
@@ -185,7 +150,7 @@ ZB_ZCL_DECLARE_REL_HUMIDITY_MEASUREMENT_ATTRIB_LIST(
 	NULL
 );
 
-#define bat_num
+
 
 ZB_ZCL_DECLARE_POWER_CONFIG_BATTERY_ATTRIB_LIST_EXT(
 	power_config_attr_list,
@@ -205,8 +170,6 @@ ZB_ZCL_DECLARE_POWER_CONFIG_BATTERY_ATTRIB_LIST_EXT(
 	&battery_percentage_threshold3,
 	&battery_alarm_state
 );
-
-#undef bat_num
 
 /* --------------------------------------------------------------------------
  * Cluster list
@@ -308,7 +271,7 @@ static weather_simple_desc_t simple_desc_weather = {
  * Zigbee reporting
  * -------------------------------------------------------------------------- */
 
-#define WEATHER_REPORT_ATTR_COUNT 5
+#define WEATHER_REPORT_ATTR_COUNT 4
 
 ZBOSS_DEVICE_DECLARE_REPORTING_CTX(
 	weather_reporting_info,
@@ -345,45 +308,6 @@ ZBOSS_DECLARE_DEVICE_CTX_1_EP(
 	weather_device_ctx,
 	weather_endpoint
 );
-
-/* --------------------------------------------------------------------------
- * Battery percentage
- * -------------------------------------------------------------------------- */
-
-static uint8_t battery_voltage_to_percentage(int32_t voltage_mv)
-{
-	size_t i;
-
-	if (voltage_mv >= battery_table[0].voltage_mv) {
-		return battery_table[0].percentage;
-	}
-
-	for (i = 0; i < BATTERY_TABLE_SIZE - 1; i++) {
-		int32_t high_voltage = battery_table[i].voltage_mv;
-		int32_t low_voltage = battery_table[i + 1].voltage_mv;
-
-		uint8_t high_percentage = battery_table[i].percentage;
-		uint8_t low_percentage = battery_table[i + 1].percentage;
-
-		if (voltage_mv >= low_voltage) {
-			int32_t voltage_range =
-				high_voltage - low_voltage;
-
-			int32_t percentage_range =
-				high_percentage - low_percentage;
-
-			int32_t percentage =
-				low_percentage +
-				((voltage_mv - low_voltage) *
-				 percentage_range) /
-				voltage_range;
-
-			return (uint8_t)percentage;
-		}
-	}
-
-	return 0;
-}
 
 /* --------------------------------------------------------------------------
  * AHT20
@@ -515,14 +439,7 @@ static int read_vdd(const struct device *adc, int32_t *vdd_mv)
 		((int32_t)sample * 3600 + (1 << (ADC_RESOLUTION - 1))) /
 		(1 << ADC_RESOLUTION);
 
-		battery_voltage =
-		(zb_uint8_t)(*vdd_mv / 100);
-
-	uint8_t percentage =
-		battery_voltage_to_percentage(*vdd_mv);
-
-	battery_percentage_remaining =
-		(zb_uint8_t)(percentage * 2);
+		battery_voltage = (zb_uint16_t)(*vdd_mv);
 
 	if (*vdd_mv < BATTERY_LOW_WARNING_MV) {
 		LOG_WRN(
@@ -640,33 +557,7 @@ static void configure_reporting(void)
 	reporting.u.send_info.min_interval = 0;
 	reporting.u.send_info.max_interval =
 		MEASUREMENT_INTERVAL_SECONDS;
-	reporting.u.send_info.delta.u8 = 1;
-
-	zb_zcl_put_reporting_info(
-		&reporting,
-		ZB_TRUE
-	);
-
-	/* Battery percentage */
-
-	memset(&reporting, 0, sizeof(reporting));
-
-	reporting.direction =
-		ZB_ZCL_CONFIGURE_REPORTING_SEND_REPORT;
-	reporting.ep = WEATHER_ENDPOINT;
-	reporting.cluster_id =
-		ZB_ZCL_CLUSTER_ID_POWER_CONFIG;
-	reporting.cluster_role =
-		ZB_ZCL_CLUSTER_SERVER_ROLE;
-	reporting.attr_id =
-		ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID;
-	reporting.dst.short_addr = 0x0000;
-	reporting.dst.endpoint = 1;
-	reporting.dst.profile_id = ZB_AF_HA_PROFILE_ID;
-	reporting.u.send_info.min_interval = 0;
-	reporting.u.send_info.max_interval =
-		MEASUREMENT_INTERVAL_SECONDS;
-	reporting.u.send_info.delta.u8 = 10;
+	reporting.u.send_info.delta.u16 = 1;
 
 	zb_zcl_put_reporting_info(
 		&reporting,
@@ -899,8 +790,7 @@ int main(void)
 			LOG_INF(
 				"T=%d.%02d C RH=%u.%02u %% "
 				"P=%d.%01d kPa "
-				"VDD=%d.%03d V "
-				"Battery=%u%%",
+				"VDD=%d.%03d V ",
 				temperature / 100,
 				temperature % 100,
 				humidity / 100,
@@ -908,8 +798,7 @@ int main(void)
 				pressure / 10,
 				pressure % 10,
 				vdd_mv / 1000,
-				vdd_mv % 1000,
-				battery_percentage_remaining / 2
+				vdd_mv % 1000
 			);
 
 			/* Mark attributes for reporting */
@@ -946,15 +835,6 @@ int main(void)
 				ZB_ZCL_CLUSTER_SERVER_ROLE,
 				ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_ID,
 				(zb_uint8_t *)&battery_voltage,
-				ZB_FALSE
-			);
-
-			ZB_ZCL_SET_ATTRIBUTE(
-				WEATHER_ENDPOINT,
-				ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
-				ZB_ZCL_CLUSTER_SERVER_ROLE,
-				ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
-				(zb_uint8_t *)&battery_percentage_remaining,
 				ZB_FALSE
 			);
 
